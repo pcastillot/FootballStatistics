@@ -69,6 +69,7 @@ DICT_TEMPORADA = {
 data_appearances = spark.read.options(delimiter=",", header=True, encoding='UTF-8').csv(DATA_APPEARANCES)
 data_appearances = data_appearances.withColumn('goals', col('goals').cast(IntegerType()))
 data_appearances = data_appearances.withColumn('assists', col('assists').cast(IntegerType()))
+data_appearances = data_appearances.withColumn('minutes_played', col('minutes_played').cast(IntegerType()))
 
 # DataFrame del csv clubs
 data_clubs = spark.read.options(delimiter=",", header=True, encoding='UTF-8').csv(DATA_CLUBS)
@@ -285,22 +286,40 @@ elif user_select == 'Equipo':
         # Obtenemos los partidos de la temporada seleccionada
         partidos_temporada = data_games.select(col('game_id'), col('season')).where(col('season') == temporada)
         # Juntamos la tabla de apariciones a la de partidos de la temporada para obtener el id de los jugadores
-        partidos_temporada = partidos_temporada.join(data_appearances, data_appearances.game_id == partidos_temporada.game_id).drop(partidos_temporada.game_id)
+        partidos_temporada = partidos_temporada.join(data_appearances, data_appearances.game_id == partidos_temporada.game_id).drop(data_appearances.game_id)
         # Obtenemos las apariciones de los jugadores del equipo seleccionado
         jugadores_equipo_temporada = partidos_temporada.where(col('player_club_id') == id_equipo)
         # Eliminamos las multiples apariciones y nos quedamos solo con los player id que aparecen
         jugadores_equipo_temporada = jugadores_equipo_temporada.select(col('player_id'), col('player_club_id')).dropDuplicates(['player_id'])
         # Juntamos la tabla de jugadores para obtener toda la informacion de cada jugador
-        jugadores_equipo_temporada = jugadores_equipo_temporada.join(data_players, data_players.player_id == jugadores_equipo_temporada.player_id)
-
-        jugadores_equipo_temporada.show()
+        jugadores_equipo_temporada = jugadores_equipo_temporada.join(data_players, data_players.player_id == jugadores_equipo_temporada.player_id).drop(data_players.player_id)
 
         list_jugadores_equipo_temporada = []
         for jugador in jugadores_equipo_temporada.collect():
             list_jugadores_equipo_temporada.append(jugador['pretty_name'])
 
         jugador_seleccionado = st.selectbox('Seleccione jugador', list_jugadores_equipo_temporada)
-        st.write(jugador_seleccionado)
+        id_jugador = jugadores_equipo_temporada.select('player_id').where(col('pretty_name') == jugador_seleccionado).collect()[0][0]
 
+        partidos_jugador_temporada = partidos_temporada.where(col('player_id') == id_jugador)
 
+        # Ya podemos sacar los goles y asistencias del jugador en la temporada ademas de otras estadisticas
+        goles_temporada_jugador = int(partidos_jugador_temporada.groupBy('player_id').sum('goals').collect()[0][1])
+        asistencias_temporada_jugador = int(partidos_jugador_temporada.groupBy('player_id').sum('assists').collect()[0][1])
+        minutos_temporada_jugador = int(partidos_jugador_temporada.groupBy('player_id').sum('minutes_played').collect()[0][1])
+        num_partidos_temporada_jugador = int(partidos_jugador_temporada.groupBy('player_id').count().collect()[0][1])
+
+        goles_minuto = goles_temporada_jugador/minutos_temporada_jugador
+        asistencias_minuto = asistencias_temporada_jugador/minutos_temporada_jugador
+        goles_partido = goles_temporada_jugador/num_partidos_temporada_jugador
+        asistencias_partido = asistencias_temporada_jugador/num_partidos_temporada_jugador
+
+        st.write('Goles en la temporada ', temporada_largo, ': ', goles_temporada_jugador)
+        st.write('Asistencias en la temporada ', temporada_largo, ': ', asistencias_temporada_jugador)
+        st.write(" ")
+        st.write('Relacion goles/minuto jugado en la temporada ', temporada_largo, ': ', float('{:.5f}'.format(goles_minuto)))
+        st.write('Relacion asistencias/minuto jugado en la temporada ', temporada_largo, ': ', float('{:.5f}'.format(asistencias_minuto)))
+        st.write(" ")
+        st.write('Relacion goles/partido jugado en la temporada ', temporada_largo, ': ', float('{:.5f}'.format(goles_partido)))
+        st.write('Relacion asistencias/partido jugado en la temporada ', temporada_largo, ': ', float('{:.5f}'.format(asistencias_partido)))
 
