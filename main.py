@@ -4,11 +4,13 @@ import re
 import streamlit as st
 import pandas as pd
 import pydeck as pdk
+import plotly.express as px
 from collections import Counter
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import substring, avg, udf, lower, when, count, to_date, first, last
 from pyspark.sql.functions import regexp_replace, col, concat, lit
-from pyspark.sql.types import StringType, FloatType, IntegerType
+from pyspark.sql.types import StringType, FloatType, IntegerType, DoubleType
+
 
 def strip_accents(string):
     return ''.join(c for c in unicodedata.normalize('NFD', string)
@@ -23,6 +25,10 @@ def getEquipoFromID(id):
 
     return equipo
 
+def getPosicionJugador(id_jugador):
+    posicion_jugador = data_players.select('position').where(col('player_id') == id_jugador).collect()[0][0]
+    subposicion_jugador = data_players.select('sub_position').where(col('player_id') == id_jugador).collect()[0][0]
+    return posicion_jugador + " - " + subposicion_jugador
 
 st.title('Futbol')
 
@@ -63,6 +69,13 @@ DICT_TEMPORADA = {
     '2021-2022': '2021',
 }
 
+DICT_POSICION = {
+    'FW': 'Delantero',
+    'MF': 'Centrocampista',
+    'DF': 'Defensa',
+    'GK': 'Portero'
+}
+
 # COMIENZO
 with st.spinner('Cargando datos...'):
     # DataFrame del csv appearances
@@ -88,20 +101,29 @@ with st.spinner('Cargando datos...'):
 
     # DataFrame del xlsx final
     data_final = spark.read.options(delimiter=",", header=True, encoding='UTF-8').csv(DATA_FINAL)
+    data_final = data_final.replace(',', '.')
+    data_final = data_final.withColumn('Gls90', regexp_replace('Gls90', ',', '.').cast('float'))
+    data_final = data_final.withColumn('Ast90', regexp_replace('Ast90', ',', '.').cast('float'))
+    data_final = data_final.withColumn('SoT%', regexp_replace('SoT%', ',', '.').cast('float'))
+    data_final = data_final.withColumn('G/Sh', regexp_replace('G/Sh', ',', '.').cast('float'))
+    data_final = data_final.withColumn('Blocks', regexp_replace('Blocks', ',', '.').cast('int'))
+    data_final = data_final.withColumn('Cmp%', regexp_replace('Cmp%', ',', '.').cast('float'))
 
-user_select = st.selectbox('Seleccione qué estadísticas quiere visualizar', ['Jugador', 'Equipo'])
+
+user_select = st.selectbox('Seleccione qué estadísticas quiere visualizar', ['Jugador', 'Equipo', 'Temporada 19-20'])
+
+#############################################################
+# Jugador
+#############################################################
 
 if user_select == 'Jugador':
 
     # RENDIMIENTO JUGADOR
-    data_rendimiento_valor = data_final.select('Player', 'club_x').collect()
+    data_rendimiento_valor = data_final.select('Player').collect()
 
     jugadores = []
     for jugador in data_rendimiento_valor:
-        if jugador['club_x'] == None:
-            jugadores.append(jugador['Player'])
-        else:
-            jugadores.append(jugador['Player'])
+        jugadores.append(jugador['Player'])
 
     st.subheader('Rendimiento y valor de un jugador')
     jugador_seleccionado = st.selectbox('Seleccione el jugador', jugadores)
@@ -122,6 +144,7 @@ if user_select == 'Jugador':
 
         # Obtenemos estadisticas del jugador
         valor_jugador = data_final.select('Market value').where(col('Player') == nombre_jugador).collect()[0][0]
+        posicion_jugador = getPosicionJugador(id_jugador)
         goles_total_jugador = data_appearances.groupBy('player_id').sum('goals').where(col('player_id') == id_jugador).collect()[0][1]
         asistencias_total_jugador = data_appearances.groupBy('player_id').sum('assists').where(col('player_id') == id_jugador).collect()[0][1]
         nacionalidad_jugador = data_players.select('country_of_citizenship').where(col('player_id') == id_jugador).collect()[0][0]
@@ -141,13 +164,14 @@ if user_select == 'Jugador':
     # Mostramos las estadisticas en pantalla
     st.write('Nacionalidad: ', nacionalidad_jugador)
     st.write('Equipo actual: ', equipo_jugador)
+    st.write('Posición: ', posicion_jugador)
     st.write('Goles totales del jugador: ', int(goles_total_jugador))
     st.write('Asistencias totales del jugador: ', int(asistencias_total_jugador))
     st.write('Valor del jugador: ', valor_jugador)
 
     # Slider para que el usuario elija la temporada
     temporada = st.select_slider('Selecciona la temporada',
-                                 options=list(DICT_TEMPORADA.keys())[indice_inicio:indice_final])
+                                 options=list(DICT_TEMPORADA.keys())[indice_inicio:indice_final+1])
     with st.spinner('Cargando datos...'):
         # Formateamos la temporada para buscarla en el dataset
         temporada_largo = DICT_TEMPORADA.get(temporada)
@@ -221,8 +245,9 @@ if user_select == 'Jugador':
     # a_date = st.date_input("Pick a date", min_value=min_date, max_value=max_date)
 
 
-# Sacar victorias y derrotas, comprobar si el jugador esta dando un beneficio al equipo
-#
+#############################################################
+# Equipo
+#############################################################
 
 elif user_select == 'Equipo':
     equipos = []
@@ -335,10 +360,11 @@ elif user_select == 'Equipo':
     # Comprobamos si solo hay datos de una temporada
     if indice_final == indice_inicio:
         temporada = ultima_aparicion_equipo
-        st.subheader('Temporada ' + str(temporada) + '-' + str(temporada+1))
+        temporada_largo = str(temporada) + "-" + str(temporada+1)
+        st.subheader('Temporada ' + temporada_largo)
     else:
         # Si hay datos de mas de una temporada ofrecemos el slider para elegir
-        options_slider = list(DICT_TEMPORADA.keys())[indice_inicio:indice_final]
+        options_slider = list(DICT_TEMPORADA.keys())[indice_inicio:indice_final+1]
         # Slider para que el usuario elija la temporada
         temporada_largo = st.select_slider('Selecciona la temporada', options=options_slider)
         temporada = DICT_TEMPORADA.get(temporada_largo)
@@ -443,18 +469,184 @@ elif user_select == 'Equipo':
             asistencias_temporada_jugador = int(partidos_jugador_temporada.groupBy('player_id').sum('assists').collect()[0][1])
             minutos_temporada_jugador = int(partidos_jugador_temporada.groupBy('player_id').sum('minutes_played').collect()[0][1])
             num_partidos_temporada_jugador = int(partidos_jugador_temporada.groupBy('player_id').count().collect()[0][1])
+            posicion_jugador = getPosicionJugador(id_jugador)
 
             goles_minuto = goles_temporada_jugador/minutos_temporada_jugador
             asistencias_minuto = asistencias_temporada_jugador/minutos_temporada_jugador
             goles_partido = goles_temporada_jugador/num_partidos_temporada_jugador
             asistencias_partido = asistencias_temporada_jugador/num_partidos_temporada_jugador
 
+        st.write('Posición: ', posicion_jugador)
+        st.write('Partidos jugados: ', num_partidos_temporada_jugador)
         st.write('Goles en la temporada ', temporada_largo, ': ', goles_temporada_jugador)
         st.write('Asistencias en la temporada ', temporada_largo, ': ', asistencias_temporada_jugador)
         st.write(" ")
-        st.write('Relacion goles/minuto jugado en la temporada ', temporada_largo, ': ', float('{:.5f}'.format(goles_minuto)))
-        st.write('Relacion asistencias/minuto jugado en la temporada ', temporada_largo, ': ', float('{:.5f}'.format(asistencias_minuto)))
-        st.write(" ")
         st.write('Relacion goles/partido jugado en la temporada ', temporada_largo, ': ', float('{:.5f}'.format(goles_partido)))
         st.write('Relacion asistencias/partido jugado en la temporada ', temporada_largo, ': ', float('{:.5f}'.format(asistencias_partido)))
+        st.write(" ")
+        st.write('Relacion goles/minuto jugado en la temporada ', temporada_largo, ': ', float('{:.5f}'.format(goles_minuto)))
+        st.write('Relacion asistencias/minuto jugado en la temporada ', temporada_largo, ': ', float('{:.5f}'.format(asistencias_minuto)))
 
+#############################################################
+# Temporada 2019-2020
+#############################################################
+
+elif user_select == 'Temporada 19-20':
+    # Obtenemos los jugadores del archivo
+    data_jugadores_19_20 = data_final
+    jugadores_19_20 = data_jugadores_19_20.select('Player').collect()
+
+    # Creamos la lista que mostraremos en el selectbox metiendo los nombres de todos los jugadores del archivo
+    jugadores = []
+    for jugador in jugadores_19_20:
+        jugadores.append(jugador['Player'])
+
+    st.subheader('Rendimiento y valor de un jugador')
+    jugador_seleccionado = st.selectbox('Seleccione el jugador', jugadores)
+
+    # Obtenemos la posicion del jugador
+    posicion_jugador = data_jugadores_19_20.select('Pos').where(col('Player') == jugador_seleccionado).collect()[0][0]
+    # Comprobamos que hayan datos
+    if posicion_jugador == None:
+        st.error('No hay datos del jugador seleccionado')
+    else:
+        # Comprobamos si juega en mas de una posicion
+        if len(posicion_jugador.split(',')) == 2:
+            # Obtenemos la posición version extendida del jugador
+            posicion_jugador_extendido = DICT_POSICION.get(posicion_jugador.split(',')[0]) + " - " + DICT_POSICION.get(posicion_jugador.split(',')[1])
+        else:
+            posicion_jugador_extendido = DICT_POSICION.get(posicion_jugador)
+
+        # Obtenemos el valor del jugador
+        valor_jugador = data_jugadores_19_20.select('Market value').where(col('Player') == jugador_seleccionado).collect()[0][0]
+
+        equipo = data_jugadores_19_20.select('club_x').where(col('Player') == jugador_seleccionado).collect()[0][0]
+        liga = data_jugadores_19_20.select('League').where(col('Player') == jugador_seleccionado).collect()[0][0]
+        nacion = data_jugadores_19_20.select('Nation').where(col('Player') == jugador_seleccionado).collect()[0][0]
+
+        st.write('Posición: ', posicion_jugador_extendido)
+        st.write('Valor: ', valor_jugador)
+        st.write('Equipo: ', equipo)
+        st.write('Liga: ', liga)
+        st.write('Nacionalidad: ', nacion)
+
+        medias_jugador = data_jugadores_19_20.select(col('Player').alias('Tipo'), 'Gls90', 'Ast90', 'SoT%', 'G/Sh', 'Blocks', 'Cmp%').where(
+            col('Player') == jugador_seleccionado)
+
+        comparacion_seleccionada = st.selectbox('Seleccione con qué desea comparar al jugador (la comparación se realiza con el resto de jugadores de su posición)', ['Equipo', 'Liga', 'Nacionalidad'])
+        if comparacion_seleccionada == 'Equipo':
+            # Obtener estadisticas del resto de compañeros del equipo en su misma posicion
+            medias_equipo_posicion = data_jugadores_19_20.where((col('Club_x') == equipo) & (col('Pos') == posicion_jugador)).groupBy('Pos')\
+                                                    .agg(first('Club_x').alias('Tipo'), avg('Gls90').alias('Gls90'),
+                                                         avg('Ast90').alias('Ast90'), avg('SoT%').alias('SoT%'),
+                                                         avg('G/Sh').alias('G/Sh'), avg('Blocks').alias('Blocks'),
+                                                         avg('Cmp%').alias('Cmp%'))
+            medias_equipo_posicion = medias_equipo_posicion.drop('Pos')
+            df_comparado = medias_equipo_posicion.toPandas().append(medias_jugador.toPandas())
+
+            st.write("Goles por partido (Equipo/Jugador): ",
+                     float('{:.2f}'.format(medias_equipo_posicion.collect()[0]['Gls90'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['Gls90'])))
+
+            st.write("Asistencias por partido (Equipo/Jugador): ",
+                     float('{:.2f}'.format(medias_equipo_posicion.collect()[0]['Ast90'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['Ast90'])))
+
+            st.write("Porcentaje de acierto a puerta (Equipo/Jugador): ",
+                     float('{:.2f}'.format(medias_equipo_posicion.collect()[0]['SoT%'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['SoT%'])))
+
+            st.write("Goles por disparo (Equipo/Jugador): ",
+                     float('{:.2f}'.format(medias_equipo_posicion.collect()[0]['G/Sh'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['G/Sh'])))
+
+            st.write("Pases completados (Equipo/Jugador): ",
+                     float('{:.2f}'.format(medias_equipo_posicion.collect()[0]['Cmp%'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['Cmp%'])))
+
+            st.write("Bloqueos exitosos (Equipo/Jugador): ",
+                     float('{:.2f}'.format(medias_equipo_posicion.collect()[0]['Blocks'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['Blocks'])))
+
+            fig = px.bar(df_comparado, x="Tipo", y=df_comparado.columns, barmode='group', height=400)
+            st.plotly_chart(fig)
+
+            st.write(df_comparado)
+
+
+        elif comparacion_seleccionada == 'Liga':
+            # Obtener estadisticas del resto de compañeros del equipo en su misma posicion
+            medias_liga_posicion = data_jugadores_19_20.where(
+                (col('League') == liga) & (col('Pos') == posicion_jugador)).groupBy('Pos') \
+                .agg(first('League').alias('Tipo'), avg('Gls90').alias('Gls90'), avg('Ast90').alias('Ast90'), avg('SoT%').alias('SoT%'),
+                     avg('G/Sh').alias('G/Sh'), avg('Blocks').alias('Blocks'), avg('Cmp%').alias('Cmp%'))
+            medias_liga_posicion = medias_liga_posicion.drop('Pos')
+            df_comparado = medias_liga_posicion.toPandas().append(medias_jugador.toPandas())
+
+            st.write("Goles por partido (Liga/Jugador): ",
+                     float('{:.2f}'.format(medias_liga_posicion.collect()[0]['Gls90'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['Gls90'])))
+
+            st.write("Asistencias por partido (Liga/Jugador): ",
+                     float('{:.2f}'.format(medias_liga_posicion.collect()[0]['Ast90'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['Ast90'])))
+
+            st.write("Porcentaje de acierto a puerta (Liga/Jugador): ",
+                     float('{:.2f}'.format(medias_liga_posicion.collect()[0]['SoT%'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['SoT%'])))
+
+            st.write("Goles por disparo (Liga/Jugador): ",
+                     float('{:.2f}'.format(medias_liga_posicion.collect()[0]['G/Sh'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['G/Sh'])))
+
+            st.write("Pases completados (Liga/Jugador): ",
+                     float('{:.2f}'.format(medias_liga_posicion.collect()[0]['Cmp%'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['Cmp%'])))
+
+            st.write("Bloqueos exitosos (Liga/Jugador): ",
+                     float('{:.2f}'.format(medias_liga_posicion.collect()[0]['Blocks'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['Blocks'])))
+
+
+            df_comparado.columns = ['Tipo', 'Goles por partido', 'Asistencias por partido', '% Disparos a puerta', 'Goles por disparo', 'Bloqueos', '% Pases acertados']
+            fig = px.bar(df_comparado, x="Tipo", y=df_comparado.columns, barmode='group', height=400)
+            st.plotly_chart(fig)
+            st.write(df_comparado)
+
+        elif comparacion_seleccionada == 'Nacionalidad':
+            # Obtener estadisticas del resto de compañeros del equipo en su misma posicion
+            medias_nacion_posicion = data_jugadores_19_20.where(
+                (col('Nation') == nacion) & (col('Pos') == posicion_jugador)).groupBy('Pos') \
+                .agg(first('Nation').alias('Tipo'), avg('Gls90').alias('Gls90'), avg('Ast90').alias('Ast90'), avg('SoT%').alias('SoT%'),
+                     avg('G/Sh').alias('G/Sh'), avg('Blocks').alias('Blocks'), avg('Cmp%').alias('Cmp%'))
+            medias_nacion_posicion = medias_nacion_posicion.drop('Pos')
+            df_comparado = medias_nacion_posicion.toPandas().append(medias_jugador.toPandas())
+
+            st.write("Goles por partido (Nacionalidad/Jugador): ",
+                     float('{:.2f}'.format(medias_nacion_posicion.collect()[0]['Gls90'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['Gls90'])))
+
+            st.write("Asistencias por partido (Nacionalidad/Jugador): ",
+                     float('{:.2f}'.format(medias_nacion_posicion.collect()[0]['Ast90'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['Ast90'])))
+
+            st.write("Porcentaje de acierto a puerta (Nacionalidad/Jugador): ",
+                     float('{:.2f}'.format(medias_nacion_posicion.collect()[0]['SoT%'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['SoT%'])))
+
+            st.write("Goles por disparo (Nacionalidad/Jugador): ",
+                     float('{:.2f}'.format(medias_nacion_posicion.collect()[0]['G/Sh'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['G/Sh'])))
+
+            st.write("Pases completados (Nacionalidad/Jugador): ",
+                     float('{:.2f}'.format(medias_nacion_posicion.collect()[0]['Cmp%'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['Cmp%'])))
+
+            st.write("Bloqueos exitosos (Nacionalidad/Jugador): ",
+                     float('{:.2f}'.format(medias_nacion_posicion.collect()[0]['Blocks'])), '/',
+                     float('{:.2f}'.format(medias_jugador.collect()[0]['Blocks'])))
+
+            fig = px.bar(df_comparado, x="Tipo", y=df_comparado.columns, barmode='group', height=400)
+            st.plotly_chart(fig)
+
+            st.write(df_comparado)
